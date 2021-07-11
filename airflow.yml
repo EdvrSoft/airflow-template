@@ -1,0 +1,120 @@
+version: "3.8"
+
+x-common:
+  &airflow-common
+  image: apache/airflow:2.1.1
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN_CMD: "cat /run/secrets/dev_airflow__core__sql__alchemy__conn"
+    AIRFLOW__CELERY__RESULT_BACKEND_CMD: "cat /run/secrets/dev_airflow__celery__result_backend"
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    AIRFLOW__CORE__FERNET_KEY_CMD: "cat /run/secrets/dev_airflow__core__fernet_key"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'true'
+    AIRFLOW__API__AUTH_BACKEND: 'airflow.api.auth.backend.basic_auth'
+  secrets:
+    - dev_airflow__core__sql__alchemy__conn
+    - dev_airflow__celery__result_backend
+    - dev_airflow__core__fernet_key
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+  user: "${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-0}"
+  deploy:
+    restart_policy:
+      condition: on-failure
+      delay: 3s
+      max_attempts: 3
+      window: 10s
+
+services:
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER_FILE: /run/secrets/dev_airflow_postgres_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/dev_airflow_postgres_password
+      POSTGRES_DB: airflow
+    secrets:
+      - dev_airflow_postgres_user
+      - dev_airflow_postgres_password
+    volumes:
+      - dev-postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+
+
+  redis:
+    image: redis:6.2.4
+    ports:
+      - 6379:6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 30s
+      retries: 50
+
+
+  webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - 8080:8080
+    #healthcheck:
+    #  test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+    #  interval: 10s
+    #  timeout: 10s
+    #  retries: 5
+
+
+  scheduler:
+    <<: *airflow-common
+    command: scheduler
+    #healthcheck:
+    #  test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+    #  interval: 10s
+    #  timeout: 10s
+    #  retries: 5
+
+
+  worker:
+    <<: *airflow-common
+    command: celery worker
+    #healthcheck:
+    #  test:
+    #    - "CMD-SHELL"
+    #    - 'celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+    #  interval: 10s
+    #  timeout: 10s
+    #  retries: 5
+
+  flower:
+    <<: *airflow-common
+    command: celery flower
+    ports:
+      - 5555:5555
+    #healthcheck:
+    #  test: ["CMD", "curl", "--fail", "http://localhost:5555/"]
+    #  interval: 10s
+    #  timeout: 10s
+    #  retries: 5
+
+
+volumes:
+  dev-postgres-db-volume:
+    external: true
+
+secrets:
+  dev_airflow_postgres_user:
+    external: true
+  dev_airflow_postgres_password:
+    external: true
+  dev_airflow__core__sql__alchemy__conn:
+    external: true
+  dev_airflow__celery__result_backend:
+    external: true
+  dev_airflow__core__fernet_key:
+    external: true
